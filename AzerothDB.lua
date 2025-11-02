@@ -1,5 +1,5 @@
 AzerothDB = {
-    _version = "1.0.0",
+    _version = "1.0.1",
     _tables = {},
 }
 
@@ -30,24 +30,24 @@ function AzerothDB:CreateTable(tableName, primaryKey)
 end
 
 function AzerothDB:CreateIndex(tableName, fieldName)
-    local table = self._tables[tableName]
-    if not table then
+    local tbl = self._tables[tableName]
+    if not tbl then
         error("Table '" .. tableName .. "' does not exist!")
         return false
     end
     
-    if table._indexes[fieldName] then
+    if tbl._indexes[fieldName] then
         print("AzerothDB: Index on '" .. fieldName .. "' already exists")
         return false
     end
     
-    table._indexes[fieldName] = {}
+    tbl._indexes[fieldName] = {}
     
-    for pk, row in pairs(table._rows) do
+    for pk, row in pairs(tbl._rows) do
         local value = row[fieldName]
         if value ~= nil then
-            table._indexes[fieldName][value] = table._indexes[fieldName][value] or {}
-            table.insert(table._indexes[fieldName][value], pk)
+            tbl._indexes[fieldName][value] = tbl._indexes[fieldName][value] or {}
+            table.insert(tbl._indexes[fieldName][value], pk)
         end
     end
     
@@ -57,28 +57,28 @@ end
 
 --- INSERT
 function AzerothDB:Insert(tableName, row)
-    local table = self._tables[tableName]
-    if not table then
+    local tbl = self._tables[tableName]
+    if not tbl then
         error("Table '" .. tableName .. "' does not exist!")
         return nil
     end
     
-    local pk = row[table._pk]
+    local pk = row[tbl._pk]
     
     if not pk then
-        table._autoIncrement = table._autoIncrement + 1
-        pk = table._autoIncrement
-        row[table._pk] = pk
+        tbl._autoIncrement = tbl._autoIncrement + 1
+        pk = tbl._autoIncrement
+        row[tbl._pk] = pk
     end
     
-    if table._rows[pk] then
+    if tbl._rows[pk] then
         error("Duplicate primary key '" .. tostring(pk) .. "' in table '" .. tableName .. "'")
         return nil
     end
     
-    table._rows[pk] = row
+    tbl._rows[pk] = row
 
-    for fieldName, index in pairs(table._indexes) do
+    for fieldName, index in pairs(tbl._indexes) do
         local value = row[fieldName]
         if value ~= nil then
             index[value] = index[value] or {}
@@ -102,8 +102,8 @@ end
 
 --- SELECT
 function AzerothDB:Select(tableName, whereFunc)
-    local table = self._tables[tableName]
-    if not table then
+    local tbl = self._tables[tableName]
+    if not tbl then
         error("Table '" .. tableName .. "' does not exist!")
         return {}
     end
@@ -111,13 +111,13 @@ function AzerothDB:Select(tableName, whereFunc)
     local results = {}
     
     if not whereFunc then
-        for pk, row in pairs(table._rows) do
+        for pk, row in pairs(tbl._rows) do
             table.insert(results, row)
         end
         return results
     end
     
-    for pk, row in pairs(table._rows) do
+    for pk, row in pairs(tbl._rows) do
         if whereFunc(row) then
             table.insert(results, row)
         end
@@ -127,23 +127,23 @@ function AzerothDB:Select(tableName, whereFunc)
 end
 
 function AzerothDB:SelectByPK(tableName, primaryKey)
-    local table = self._tables[tableName]
-    if not table then
+    local tbl = self._tables[tableName]
+    if not tbl then
         error("Table '" .. tableName .. "' does not exist!")
         return nil
     end
     
-    return table._rows[primaryKey]
+    return tbl._rows[primaryKey]
 end
 
 function AzerothDB:SelectByIndex(tableName, fieldName, value)
-    local table = self._tables[tableName]
-    if not table then
+    local tbl = self._tables[tableName]
+    if not tbl then
         error("Table '" .. tableName .. "' does not exist!")
         return {}
     end
     
-    local index = table._indexes[fieldName]
+    local index = tbl._indexes[fieldName]
     if not index then
         error("No index on field '" .. fieldName .. "' in table '" .. tableName .. "'")
         return {}
@@ -153,20 +153,20 @@ function AzerothDB:SelectByIndex(tableName, fieldName, value)
     local pks = index[value] or {}
     
     for _, pk in ipairs(pks) do
-        table.insert(results, table._rows[pk])
+        table.insert(results, tbl._rows[pk])
     end
     
     return results
 end
 
 function AzerothDB:SelectOne(tableName, whereFunc)
-    local table = self._tables[tableName]
-    if not table then
+    local tbl = self._tables[tableName]
+    if not tbl then
         error("Table '" .. tableName .. "' does not exist!")
         return nil
     end
     
-    for pk, row in pairs(table._rows) do
+    for pk, row in pairs(tbl._rows) do
         if not whereFunc or whereFunc(row) then
             return row
         end
@@ -177,29 +177,29 @@ end
 
 --- UPDATE
 function AzerothDB:Update(tableName, whereFunc, updateFunc)
-    local table = self._tables[tableName]
-    if not table then
+    local tbl = self._tables[tableName]
+    if not tbl then
         error("Table '" .. tableName .. "' does not exist!")
         return 0
     end
     
     local updatedCount = 0
     
-    for pk, row in pairs(table._rows) do
+    for pk, row in pairs(tbl._rows) do
         if whereFunc(row) then
             local oldValues = {}
-            for fieldName, index in pairs(table._indexes) do
+            for fieldName, index in pairs(tbl._indexes) do
                 oldValues[fieldName] = row[fieldName]
             end
             
             updateFunc(row)
             
-            if row[table._pk] ~= pk then
+            if row[tbl._pk] ~= pk then
                 error("Cannot modify primary key! Use Delete + Insert instead.")
                 return updatedCount
             end
             
-            for fieldName, index in pairs(table._indexes) do
+            for fieldName, index in pairs(tbl._indexes) do
                 local oldValue = oldValues[fieldName]
                 local newValue = row[fieldName]
                 
@@ -228,25 +228,25 @@ function AzerothDB:Update(tableName, whereFunc, updateFunc)
 end
 
 function AzerothDB:UpdateByPK(tableName, primaryKey, updateFunc)
-    local table = self._tables[tableName]
-    if not table then
+    local tbl = self._tables[tableName]
+    if not tbl then
         error("Table '" .. tableName .. "' does not exist!")
         return false
     end
     
-    local row = table._rows[primaryKey]
+    local row = tbl._rows[primaryKey]
     if not row then
         return false
     end
     
     local oldValues = {}
-    for fieldName, index in pairs(table._indexes) do
+    for fieldName, index in pairs(tbl._indexes) do
         oldValues[fieldName] = row[fieldName]
     end
     
     updateFunc(row)
     
-    for fieldName, index in pairs(table._indexes) do
+    for fieldName, index in pairs(tbl._indexes) do
         local oldValue = oldValues[fieldName]
         local newValue = row[fieldName]
         
@@ -272,24 +272,24 @@ end
 
 --- DELETE
 function AzerothDB:Delete(tableName, whereFunc)
-    local table = self._tables[tableName]
-    if not table then
+    local tbl = self._tables[tableName]
+    if not tbl then
         error("Table '" .. tableName .. "' does not exist!")
         return 0
     end
     
     local deleteKeys = {}
     
-    for pk, row in pairs(table._rows) do
+    for pk, row in pairs(tbl._rows) do
         if whereFunc(row) then
             table.insert(deleteKeys, pk)
         end
     end
     
     for _, pk in ipairs(deleteKeys) do
-        local row = table._rows[pk]
+        local row = tbl._rows[pk]
         
-        for fieldName, index in pairs(table._indexes) do
+        for fieldName, index in pairs(tbl._indexes) do
             local value = row[fieldName]
             if value ~= nil and index[value] then
                 for i, indexPk in ipairs(index[value]) do
@@ -301,7 +301,7 @@ function AzerothDB:Delete(tableName, whereFunc)
             end
         end
         
-        table._rows[pk] = nil
+        tbl._rows[pk] = nil
     end
     
     return #deleteKeys
@@ -316,21 +316,21 @@ end
 
 --- UTILITY
 function AzerothDB:Count(tableName, whereFunc)
-    local table = self._tables[tableName]
-    if not table then
+    local tbl = self._tables[tableName]
+    if not tbl then
         return 0
     end
     
     if not whereFunc then
         local count = 0
-        for _ in pairs(table._rows) do
+        for _ in pairs(tbl._rows) do
             count = count + 1
         end
         return count
     end
     
     local count = 0
-    for pk, row in pairs(table._rows) do
+    for pk, row in pairs(tbl._rows) do
         if whereFunc(row) then
             count = count + 1
         end
@@ -339,17 +339,17 @@ function AzerothDB:Count(tableName, whereFunc)
 end
 
 function AzerothDB:Clear(tableName)
-    local table = self._tables[tableName]
-    if not table then
+    local tbl = self._tables[tableName]
+    if not tbl then
         error("Table '" .. tableName .. "' does not exist!")
         return false
     end
     
-    table._rows = {}
-    for fieldName in pairs(table._indexes) do
-        table._indexes[fieldName] = {}
+    tbl._rows = {}
+    for fieldName in pairs(tbl._indexes) do
+        tbl._indexes[fieldName] = {}
     end
-    table._autoIncrement = 0
+    tbl._autoIncrement = 0
     
     return true
 end
