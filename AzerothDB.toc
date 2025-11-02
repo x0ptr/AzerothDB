@@ -2,7 +2,7 @@
 ## Title: AzerothDB
 ## Notes: A lightweight, SQL-like database addon for World of Warcraft
 ## Author: x0ptr <x0ptrr@gmail.com>
-## Version: 1.1.0
+## Version: 1.1.1
 ## X-Website: https://github.com/x0ptr/AzerothDB
 ## X-Source: https://github.com/x0ptr/AzerothDB
 ## X-License: MIT
