@@ -162,28 +162,6 @@ Structured event logging with efficient time-series queries.
 
 ---
 
-## Performance Benchmarks
-
-| Operation | 1K Rows | 10K Rows | 100K Rows |
-|-----------|---------|----------|-----------|
-| Insert | <1ms | 3ms | 35ms |
-| PK Lookup | <1ms | <1ms | <1ms |
-| Indexed Query | <1ms | 2ms | 8ms |
-| Full Scan | 2ms | 18ms | 195ms |
-
-*Tested on Intel i7-9700K, WoW Classic Era 1.15.0*
-
----
-
-## Production Ready
-
-- **1M+** operations in production environments
-- **Zero** data corruption reports
-- **<0.1%** memory overhead vs raw SavedVariables
-- **Battle-tested** across Classic, TBC, WotLK, and Retail
-
----
-
 ## Contributing
 
 Contributions welcome! Please read [CONTRIBUTING.md](CONTRIBUTING.md) before submitting PRs.
