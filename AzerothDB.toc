@@ -1,0 +1,8 @@
+## Interface: 110205
+## Title: AzerothDB
+## Notes: A lightweight, SQL-like database addon for World of Warcraft
+## Author: YourName
+## Version: 1.0.0
+## SavedVariables: AzerothDB_SavedData
+
+AzerothDB.lua
