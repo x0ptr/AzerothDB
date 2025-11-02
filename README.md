@@ -191,8 +191,8 @@ MIT License - see [LICENSE](LICENSE) for details.
 ## Support
 
 - **Issues**: [GitHub Issues](https://github.com/x0ptr/AzerothDB/issues)
-- **Documentation**: [API Reference](docs/api.md)
-- **Discord**: [Join our community](#) *(coming soon)*
+- **Documentation**: [API Reference](docs/API.md)
+- **Discord**: [Join our community](https://discord.gg/zjRynUUWRT)
 
 ---
 
