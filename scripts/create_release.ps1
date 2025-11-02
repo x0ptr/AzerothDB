@@ -24,9 +24,7 @@ Copy-Item (Join-Path $RootDir "AzerothDB.lua") $TempDir
 Copy-Item (Join-Path $RootDir "AzerothDB.toc") $TempDir
 Copy-Item (Join-Path $RootDir "README.md") $TempDir
 
-$DocsDir = Join-Path $TempDir "docs"
-New-Item -ItemType Directory -Path $DocsDir | Out-Null
-Copy-Item (Join-Path $RootDir "docs\api.md") $DocsDir
+Copy-Item (Join-Path $RootDir "docs") $TempDir -Recurse
 
 Write-Host "Creating zip archive..." -ForegroundColor Yellow
 Compress-Archive -Path $TempDir -DestinationPath $OutputFile -Force

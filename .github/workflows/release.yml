@@ -23,8 +23,7 @@ jobs:
           cp AzerothDB.lua release/AzerothDB/
           cp AzerothDB.toc release/AzerothDB/
           cp README.md release/AzerothDB/
-          mkdir -p release/AzerothDB/docs
-          cp docs/api.md release/AzerothDB/docs/
+          cp -r docs release/AzerothDB/
       
       - name: Create zip archive
         run: |

@@ -1,5 +1,5 @@
 AzerothDB = {
-    _version = "1.1.1",
+    _version = "1.1.2",
     _tables = {},
     _connections = {},
     _connectionsByName = {},
