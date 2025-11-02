@@ -1,0 +1,63 @@
+name: Create Release
+
+on:
+  push:
+    tags:
+      - 'v*'
+
+jobs:
+  release:
+    runs-on: ubuntu-latest
+    
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+      
+      - name: Get version from tag
+        id: get_version
+        run: echo "VERSION=${GITHUB_REF#refs/tags/v}" >> $GITHUB_OUTPUT
+      
+      - name: Create release directory
+        run: |
+          mkdir -p release/AzerothDB
+          cp AzerothDB.lua release/AzerothDB/
+          cp AzerothDB.toc release/AzerothDB/
+          cp README.md release/AzerothDB/
+          mkdir -p release/AzerothDB/docs
+          cp docs/api.md release/AzerothDB/docs/
+      
+      - name: Create zip archive
+        run: |
+          cd release
+          zip -r AzerothDB-${{ steps.get_version.outputs.VERSION }}.zip AzerothDB
+          cd ..
+      
+      - name: Generate changelog
+        id: changelog
+        run: |
+          echo "CHANGELOG<<EOF" >> $GITHUB_OUTPUT
+          git log $(git describe --tags --abbrev=0 HEAD^)..HEAD --pretty=format:"- %s" >> $GITHUB_OUTPUT
+          echo "" >> $GITHUB_OUTPUT
+          echo "EOF" >> $GITHUB_OUTPUT
+      
+      - name: Create GitHub Release
+        uses: softprops/action-gh-release@v1
+        with:
+          files: release/AzerothDB-${{ steps.get_version.outputs.VERSION }}.zip
+          body: |
+            ## AzerothDB ${{ steps.get_version.outputs.VERSION }}
+            
+            ${{ steps.changelog.outputs.CHANGELOG }}
+            
+            ### Installation
+            1. Download `AzerothDB-${{ steps.get_version.outputs.VERSION }}.zip`
+            2. Extract to `World of Warcraft\_retail_\Interface\AddOns\`
+            3. Reload UI (`/reload`)
+            
+            ### Documentation
+            - [API Reference](https://github.com/x0ptr/AzerothDB/blob/main/docs/api.md)
+            - [README](https://github.com/x0ptr/AzerothDB/blob/main/README.md)
+          draft: false
+          prerelease: false
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
