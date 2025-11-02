@@ -1,36 +1,248 @@
 AzerothDB = {
     _version = "1.0.1",
     _tables = {},
+    _connections = {},
+    _connectionsByName = {},
 }
 
 function AzerothDB:Initialize()
     if not AzerothDB_SavedData then
-        AzerothDB_SavedData = {}
+        AzerothDB_SavedData = {
+            _sharedTables = {},
+            _connectionTables = {},
+        }
     end
-    self._tables = AzerothDB_SavedData
+    
+    if not AzerothDB_SavedData._sharedTables then
+        AzerothDB_SavedData._sharedTables = {}
+    end
+    
+    if not AzerothDB_SavedData._connectionTables then
+        AzerothDB_SavedData._connectionTables = {}
+    end
+    
+    self._tables = AzerothDB_SavedData._sharedTables
+    
+    for name, connData in pairs(AzerothDB_SavedData._connectionTables) do
+        local conn = self:CreateConnection(name)
+        if conn then
+            conn._tables = connData
+        end
+    end
+    
     print("AzerothDB initialized. Version:", self._version)
 end
 
+function AzerothDB:CreateConnection(name)
+    if not name or type(name) ~= "string" then
+        error("Connection name must be a non-empty string!")
+        return nil
+    end
+    
+    if self._connectionsByName[name] then
+        error("Connection '" .. name .. "' already exists!")
+        return nil
+    end
+    
+    local conn = {
+        _name = name,
+        _tables = {},
+    }
+    
+    if not AzerothDB_SavedData then
+        AzerothDB_SavedData = {
+            _sharedTables = {},
+            _connectionTables = {},
+        }
+    end
+    
+    if not AzerothDB_SavedData._connectionTables then
+        AzerothDB_SavedData._connectionTables = {}
+    end
+    
+    if not AzerothDB_SavedData._connectionTables[name] then
+        AzerothDB_SavedData._connectionTables[name] = {}
+    end
+    conn._tables = AzerothDB_SavedData._connectionTables[name]
+    
+    self._connectionsByName[name] = conn
+    table.insert(self._connections, conn)
+    
+    self:_bindConnectionMethods(conn)
+    
+    return conn
+end
+
+
+--- FACTORY FOR DB METHODS
+function AzerothDB:_bindConnectionMethods(conn)
+    conn.CreateTable = function(self, tableName, columns)
+        return AzerothDB:_CreateTable(conn._tables, tableName, columns)
+    end
+    
+    conn.AlterTable = function(self, tableName, newColumns)
+        return AzerothDB:_AlterTable(conn._tables, tableName, newColumns)
+    end
+    
+    conn.CreateIndex = function(self, tableName, fieldName)
+        return AzerothDB:_CreateIndex(conn._tables, tableName, fieldName)
+    end
+    
+    conn.Insert = function(self, tableName, row)
+        return AzerothDB:_Insert(conn._tables, tableName, row)
+    end
+    
+    conn.InsertMany = function(self, tableName, rows)
+        return AzerothDB:_InsertMany(conn._tables, tableName, rows)
+    end
+    
+    conn.Select = function(self, tableName, whereFunc)
+        return AzerothDB:_Select(conn._tables, tableName, whereFunc)
+    end
+    
+    conn.SelectByPK = function(self, tableName, primaryKey)
+        return AzerothDB:_SelectByPK(conn._tables, tableName, primaryKey)
+    end
+    
+    conn.SelectByIndex = function(self, tableName, fieldName, value)
+        return AzerothDB:_SelectByIndex(conn._tables, tableName, fieldName, value)
+    end
+    
+    conn.SelectOne = function(self, tableName, whereFunc)
+        return AzerothDB:_SelectOne(conn._tables, tableName, whereFunc)
+    end
+    
+    conn.Update = function(self, tableName, whereFunc, updateFunc)
+        return AzerothDB:_Update(conn._tables, tableName, whereFunc, updateFunc)
+    end
+    
+    conn.UpdateByPK = function(self, tableName, primaryKey, updateFunc)
+        return AzerothDB:_UpdateByPK(conn._tables, tableName, primaryKey, updateFunc)
+    end
+    
+    conn.Delete = function(self, tableName, whereFunc)
+        return AzerothDB:_Delete(conn._tables, tableName, whereFunc)
+    end
+    
+    conn.DeleteByPK = function(self, tableName, primaryKey)
+        return AzerothDB:_DeleteByPK(conn._tables, tableName, primaryKey)
+    end
+    
+    conn.Count = function(self, tableName, whereFunc)
+        return AzerothDB:_Count(conn._tables, tableName, whereFunc)
+    end
+    
+    conn.Clear = function(self, tableName)
+        return AzerothDB:_Clear(conn._tables, tableName)
+    end
+    
+    conn.DropTable = function(self, tableName)
+        return AzerothDB:_DropTable(conn._tables, tableName)
+    end
+end
+
+
 --- TABLES AND INDEXES
-function AzerothDB:CreateTable(tableName, primaryKey)
-    if self._tables[tableName] then
+function AzerothDB:_CreateTable(tables, tableName, columns)
+    if tables[tableName] then
         error("Table '" .. tableName .. "' already exists!")
         return false
     end
     
-    self._tables[tableName] = {
-        _pk = primaryKey,           -- Primary key field name
-        _rows = {},                 -- Actual data storage
-        _indexes = {},              -- Secondary indexes
-        _autoIncrement = 0,         -- For auto-incrementing IDs
+    if not columns or type(columns) ~= "table" then
+        error("Columns definition required!")
+        return false
+    end
+    
+    local primaryKey = nil
+    for colName, colDef in pairs(columns) do
+        if colDef.primary then
+            if primaryKey then
+                error("Only one primary key allowed!")
+                return false
+            end
+            primaryKey = colName
+        end
+    end
+    
+    if not primaryKey then
+        error("Table must have a primary key column!")
+        return false
+    end
+    
+    tables[tableName] = {
+        _pk = primaryKey,
+        _columns = columns,
+        _rows = {},
+        _indexes = {},
+        _autoIncrement = 0,
     }
     
     print("AzerothDB: Created table '" .. tableName .. "' with primary key '" .. primaryKey .. "'")
     return true
 end
 
-function AzerothDB:CreateIndex(tableName, fieldName)
-    local tbl = self._tables[tableName]
+function AzerothDB:CreateTable(tableName, columns)
+    return self:_CreateTable(self._tables, tableName, columns)
+end
+
+function AzerothDB:_AlterTable(tables, tableName, newColumns)
+    local tbl = tables[tableName]
+    if not tbl then
+        error("Table '" .. tableName .. "' does not exist!")
+        return false
+    end
+    
+    local newPrimaryKey = nil
+    for colName, colDef in pairs(newColumns) do
+        if colDef.primary then
+            if newPrimaryKey then
+                error("Only one primary key allowed!")
+                return false
+            end
+            newPrimaryKey = colName
+        end
+    end
+    
+    if not newPrimaryKey then
+        error("Table must have a primary key column!")
+        return false
+    end
+    
+    if newPrimaryKey ~= tbl._pk then
+        error("Cannot change primary key column!")
+        return false
+    end
+    
+    local removedColumns = {}
+    for colName, _ in pairs(tbl._columns) do
+        if not newColumns[colName] then
+            table.insert(removedColumns, colName)
+        end
+    end
+    
+    for _, colName in ipairs(removedColumns) do
+        for pk, row in pairs(tbl._rows) do
+            row[colName] = nil
+        end
+        
+        if tbl._indexes[colName] then
+            tbl._indexes[colName] = nil
+        end
+    end
+    
+    tbl._columns = newColumns
+    
+    print("AzerothDB: Altered table '" .. tableName .. "'")
+    return true
+end
+
+function AzerothDB:AlterTable(tableName, newColumns)
+    return self:_AlterTable(self._tables, tableName, newColumns)
+end
+
+function AzerothDB:_CreateIndex(tables, tableName, fieldName)
+    local tbl = tables[tableName]
     if not tbl then
         error("Table '" .. tableName .. "' does not exist!")
         return false
@@ -55,12 +267,43 @@ function AzerothDB:CreateIndex(tableName, fieldName)
     return true
 end
 
+function AzerothDB:CreateIndex(tableName, fieldName)
+    return self:_CreateIndex(self._tables, tableName, fieldName)
+end
+
 --- INSERT
-function AzerothDB:Insert(tableName, row)
-    local tbl = self._tables[tableName]
+function AzerothDB:_Insert(tables, tableName, row)
+    local tbl = tables[tableName]
     if not tbl then
         error("Table '" .. tableName .. "' does not exist!")
         return nil
+    end
+    
+    for colName, _ in pairs(row) do
+        if not tbl._columns[colName] then
+            error("Column '" .. colName .. "' does not exist in table '" .. tableName .. "'")
+            return nil
+        end
+    end
+    
+    for colName, colDef in pairs(tbl._columns) do
+        local value = row[colName]
+        
+        if value == nil then
+            if colDef.required and not colDef.primary then
+                error("Column '" .. colName .. "' is required!")
+                return nil
+            end
+            if colDef.default ~= nil then
+                row[colName] = colDef.default
+            end
+        elseif colDef.type then
+            local valueType = type(value)
+            if valueType ~= colDef.type then
+                error("Column '" .. colName .. "' expects type '" .. colDef.type .. "' but got '" .. valueType .. "'")
+                return nil
+            end
+        end
     end
     
     local pk = row[tbl._pk]
@@ -89,10 +332,14 @@ function AzerothDB:Insert(tableName, row)
     return pk
 end
 
-function AzerothDB:InsertMany(tableName, rows)
+function AzerothDB:Insert(tableName, row)
+    return self:_Insert(self._tables, tableName, row)
+end
+
+function AzerothDB:_InsertMany(tables, tableName, rows)
     local insertedKeys = {}
     for _, row in ipairs(rows) do
-        local pk = self:Insert(tableName, row)
+        local pk = AzerothDB:_Insert(tables, tableName, row)
         if pk then
             table.insert(insertedKeys, pk)
         end
@@ -100,9 +347,13 @@ function AzerothDB:InsertMany(tableName, rows)
     return insertedKeys
 end
 
+function AzerothDB:InsertMany(tableName, rows)
+    return self:_InsertMany(self._tables, tableName, rows)
+end
+
 --- SELECT
-function AzerothDB:Select(tableName, whereFunc)
-    local tbl = self._tables[tableName]
+function AzerothDB:_Select(tables, tableName, whereFunc)
+    local tbl = tables[tableName]
     if not tbl then
         error("Table '" .. tableName .. "' does not exist!")
         return {}
@@ -126,8 +377,12 @@ function AzerothDB:Select(tableName, whereFunc)
     return results
 end
 
-function AzerothDB:SelectByPK(tableName, primaryKey)
-    local tbl = self._tables[tableName]
+function AzerothDB:Select(tableName, whereFunc)
+    return self:_Select(self._tables, tableName, whereFunc)
+end
+
+function AzerothDB:_SelectByPK(tables, tableName, primaryKey)
+    local tbl = tables[tableName]
     if not tbl then
         error("Table '" .. tableName .. "' does not exist!")
         return nil
@@ -136,8 +391,12 @@ function AzerothDB:SelectByPK(tableName, primaryKey)
     return tbl._rows[primaryKey]
 end
 
-function AzerothDB:SelectByIndex(tableName, fieldName, value)
-    local tbl = self._tables[tableName]
+function AzerothDB:SelectByPK(tableName, primaryKey)
+    return self:_SelectByPK(self._tables, tableName, primaryKey)
+end
+
+function AzerothDB:_SelectByIndex(tables, tableName, fieldName, value)
+    local tbl = tables[tableName]
     if not tbl then
         error("Table '" .. tableName .. "' does not exist!")
         return {}
@@ -159,8 +418,12 @@ function AzerothDB:SelectByIndex(tableName, fieldName, value)
     return results
 end
 
-function AzerothDB:SelectOne(tableName, whereFunc)
-    local tbl = self._tables[tableName]
+function AzerothDB:SelectByIndex(tableName, fieldName, value)
+    return self:_SelectByIndex(self._tables, tableName, fieldName, value)
+end
+
+function AzerothDB:_SelectOne(tables, tableName, whereFunc)
+    local tbl = tables[tableName]
     if not tbl then
         error("Table '" .. tableName .. "' does not exist!")
         return nil
@@ -175,9 +438,13 @@ function AzerothDB:SelectOne(tableName, whereFunc)
     return nil
 end
 
+function AzerothDB:SelectOne(tableName, whereFunc)
+    return self:_SelectOne(self._tables, tableName, whereFunc)
+end
+
 --- UPDATE
-function AzerothDB:Update(tableName, whereFunc, updateFunc)
-    local tbl = self._tables[tableName]
+function AzerothDB:_Update(tables, tableName, whereFunc, updateFunc)
+    local tbl = tables[tableName]
     if not tbl then
         error("Table '" .. tableName .. "' does not exist!")
         return 0
@@ -192,11 +459,29 @@ function AzerothDB:Update(tableName, whereFunc, updateFunc)
                 oldValues[fieldName] = row[fieldName]
             end
             
+            local oldRow = {}
+            for k, v in pairs(row) do
+                oldRow[k] = v
+            end
+            
             updateFunc(row)
             
             if row[tbl._pk] ~= pk then
                 error("Cannot modify primary key! Use Delete + Insert instead.")
                 return updatedCount
+            end
+            
+            for colName, value in pairs(row) do
+                if not tbl._columns[colName] then
+                    error("Column '" .. colName .. "' does not exist in table '" .. tableName .. "'")
+                    return updatedCount
+                end
+                
+                local colDef = tbl._columns[colName]
+                if value ~= nil and colDef.type and type(value) ~= colDef.type then
+                    error("Column '" .. colName .. "' expects type '" .. colDef.type .. "' but got '" .. type(value) .. "'")
+                    return updatedCount
+                end
             end
             
             for fieldName, index in pairs(tbl._indexes) do
@@ -227,8 +512,12 @@ function AzerothDB:Update(tableName, whereFunc, updateFunc)
     return updatedCount
 end
 
-function AzerothDB:UpdateByPK(tableName, primaryKey, updateFunc)
-    local tbl = self._tables[tableName]
+function AzerothDB:Update(tableName, whereFunc, updateFunc)
+    return self:_Update(self._tables, tableName, whereFunc, updateFunc)
+end
+
+function AzerothDB:_UpdateByPK(tables, tableName, primaryKey, updateFunc)
+    local tbl = tables[tableName]
     if not tbl then
         error("Table '" .. tableName .. "' does not exist!")
         return false
@@ -245,6 +534,19 @@ function AzerothDB:UpdateByPK(tableName, primaryKey, updateFunc)
     end
     
     updateFunc(row)
+    
+    for colName, value in pairs(row) do
+        if not tbl._columns[colName] then
+            error("Column '" .. colName .. "' does not exist in table '" .. tableName .. "'")
+            return false
+        end
+        
+        local colDef = tbl._columns[colName]
+        if value ~= nil and colDef.type and type(value) ~= colDef.type then
+            error("Column '" .. colName .. "' expects type '" .. colDef.type .. "' but got '" .. type(value) .. "'")
+            return false
+        end
+    end
     
     for fieldName, index in pairs(tbl._indexes) do
         local oldValue = oldValues[fieldName]
@@ -270,9 +572,13 @@ function AzerothDB:UpdateByPK(tableName, primaryKey, updateFunc)
     return true
 end
 
+function AzerothDB:UpdateByPK(tableName, primaryKey, updateFunc)
+    return self:_UpdateByPK(self._tables, tableName, primaryKey, updateFunc)
+end
+
 --- DELETE
-function AzerothDB:Delete(tableName, whereFunc)
-    local tbl = self._tables[tableName]
+function AzerothDB:_Delete(tables, tableName, whereFunc)
+    local tbl = tables[tableName]
     if not tbl then
         error("Table '" .. tableName .. "' does not exist!")
         return 0
@@ -307,16 +613,24 @@ function AzerothDB:Delete(tableName, whereFunc)
     return #deleteKeys
 end
 
-function AzerothDB:DeleteByPK(tableName, primaryKey)
-    return self:Delete(tableName, function(row)
-        return row[self._tables[tableName]._pk] == primaryKey
+function AzerothDB:Delete(tableName, whereFunc)
+    return self:_Delete(self._tables, tableName, whereFunc)
+end
+
+function AzerothDB:_DeleteByPK(tables, tableName, primaryKey)
+    return AzerothDB:_Delete(tables, tableName, function(row)
+        return row[tables[tableName]._pk] == primaryKey
     end)
+end
+
+function AzerothDB:DeleteByPK(tableName, primaryKey)
+    return self:_DeleteByPK(self._tables, tableName, primaryKey)
 end
 
 
 --- UTILITY
-function AzerothDB:Count(tableName, whereFunc)
-    local tbl = self._tables[tableName]
+function AzerothDB:_Count(tables, tableName, whereFunc)
+    local tbl = tables[tableName]
     if not tbl then
         return 0
     end
@@ -338,8 +652,12 @@ function AzerothDB:Count(tableName, whereFunc)
     return count
 end
 
-function AzerothDB:Clear(tableName)
-    local tbl = self._tables[tableName]
+function AzerothDB:Count(tableName, whereFunc)
+    return self:_Count(self._tables, tableName, whereFunc)
+end
+
+function AzerothDB:_Clear(tables, tableName)
+    local tbl = tables[tableName]
     if not tbl then
         error("Table '" .. tableName .. "' does not exist!")
         return false
@@ -354,13 +672,21 @@ function AzerothDB:Clear(tableName)
     return true
 end
 
-function AzerothDB:DropTable(tableName)
-    if not self._tables[tableName] then
+function AzerothDB:Clear(tableName)
+    return self:_Clear(self._tables, tableName)
+end
+
+function AzerothDB:_DropTable(tables, tableName)
+    if not tables[tableName] then
         return false
     end
     
-    self._tables[tableName] = nil
+    tables[tableName] = nil
     return true
+end
+
+function AzerothDB:DropTable(tableName)
+    return self:_DropTable(self._tables, tableName)
 end
 
 
