@@ -1,5 +1,5 @@
 AzerothDB = {
-    _version = "1.3.0",
+    _version = "1.4.0",
     _tables = {},
     _connections = {},
     _connectionsByName = {},
@@ -18,13 +18,22 @@ AzerothDB = {
     },
     _metricsHistory = {},
     _metricsEnabled = false,
+    _accountTables = {},
+    _characterTables = {},
+    _realmTables = {},
 }
 
 function AzerothDB:Initialize()
+    local realmName = GetRealmName()
+    local playerName = UnitName("player")
+    local realmKey = realmName:gsub("%s+", "")
+    local characterKey = realmKey .. "-" .. playerName
+    
     if not AzerothDB_SavedData then
         AzerothDB_SavedData = {
             _sharedTables = {},
             _connectionTables = {},
+            _realmTables = {},
         }
     end
     
@@ -36,7 +45,22 @@ function AzerothDB:Initialize()
         AzerothDB_SavedData._connectionTables = {}
     end
     
-    self._tables = AzerothDB_SavedData._sharedTables
+    if not AzerothDB_SavedData._realmTables then
+        AzerothDB_SavedData._realmTables = {}
+    end
+    
+    if not AzerothDB_SavedData._realmTables[realmKey] then
+        AzerothDB_SavedData._realmTables[realmKey] = {}
+    end
+    
+    if not AzerothDB_CharacterData then
+        AzerothDB_CharacterData = {}
+    end
+    
+    self._accountTables = AzerothDB_SavedData._sharedTables
+    self._realmTables = AzerothDB_SavedData._realmTables[realmKey]
+    self._characterTables = AzerothDB_CharacterData
+    self._tables = self._accountTables
     self._callbackRegistry = {}
     
     for name, connData in pairs(AzerothDB_SavedData._connectionTables) do
@@ -96,8 +120,9 @@ end
 
 
 function AzerothDB:_bindConnectionMethods(conn)
-    conn.CreateTable = function(self, tableName, columns)
-        return AzerothDB:_CreateTable(conn._tables, tableName, columns)
+    conn.CreateTable = function(self, tableName, columns, scope)
+        scope = scope or "account"
+        return AzerothDB:_CreateTable(conn._tables, tableName, columns, scope)
     end
     
     conn.AlterTable = function(self, tableName, newColumns)
@@ -170,7 +195,7 @@ function AzerothDB:_bindConnectionMethods(conn)
 end
 
 
-function AzerothDB:_CreateTable(tables, tableName, columns)
+function AzerothDB:_CreateTable(tables, tableName, columns, scope)
     if tables[tableName] then
         return true
     end
@@ -202,6 +227,7 @@ function AzerothDB:_CreateTable(tables, tableName, columns)
         _rows = {},
         _indexes = {},
         _autoIncrement = 0,
+        _scope = scope or "account",
     }
     
     self:_TriggerEvent(tables, "CREATE", {
@@ -214,8 +240,22 @@ function AzerothDB:_CreateTable(tables, tableName, columns)
     return true
 end
 
-function AzerothDB:CreateTable(tableName, columns)
-    return self:_CreateTable(self._tables, tableName, columns)
+function AzerothDB:CreateTable(tableName, columns, scope)
+    scope = scope or "account"
+    
+    if scope ~= "account" and scope ~= "character" and scope ~= "realm" then
+        error("Invalid scope. Must be 'account', 'character', or 'realm'")
+        return false
+    end
+    
+    local targetTables = self._accountTables
+    if scope == "character" then
+        targetTables = self._characterTables
+    elseif scope == "realm" then
+        targetTables = self._realmTables
+    end
+    
+    return self:_CreateTable(targetTables, tableName, columns, scope)
 end
 
 function AzerothDB:_AlterTable(tables, tableName, newColumns)

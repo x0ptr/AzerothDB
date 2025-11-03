@@ -14,13 +14,13 @@ Each connection has its own isolated tables and subscriptions.
 
 ## Connection Methods
 
-### CreateTable(tableName, columns)
+### CreateTable(tableName, columns, scope)
 ```lua
 db:CreateTable("Players", {
     id = {type = "number", primary = true},
     name = {type = "string", required = true},
     level = {type = "number", default = 1}
-})
+}, "character")
 ```
 Creates a new table with the specified schema. If the table already exists, returns `true` without modifying it (idempotent operation).
 
@@ -29,6 +29,11 @@ Creates a new table with the specified schema. If the table already exists, retu
 - `primary`: marks primary key (required, one per table)
 - `required`: must be provided on insert
 - `default`: used when value not provided
+
+**Scope Options:**
+- `"account"`: data shared across all characters (default)
+- `"character"`: data unique to each character
+- `"realm"`: data shared across all characters on the same realm
 
 ### AlterTable(tableName, columns)
 ```lua
@@ -230,13 +235,13 @@ Use `AzerothDB` directly instead of a connection:
 AzerothDB:CreateTable("GlobalCache", {
     key = {type = "string", primary = true},
     data = {type = "table"}
-})
+}, "account")
 
 AzerothDB:Insert("GlobalCache", {key = "itemDB", data = {...}})
 local cache = AzerothDB:SelectByPK("GlobalCache", "itemDB")
 ```
 
-All connection methods work on `AzerothDB` for shared tables accessible by all addons.
+All connection methods work on `AzerothDB` for shared tables accessible by all addons. The scope parameter allows storing data account-wide, per-character, or per-realm.
 
 ---
 
