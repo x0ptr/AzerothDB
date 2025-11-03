@@ -256,6 +256,53 @@ AzerothDB/
 3. **Use Index Lookups** - `SelectByIndex()` is faster than filtering
 4. **Batch Operations** - Use `InsertMany()` for multiple inserts
 
+## Data Persistence & Backups
+
+### Automatic Saving
+**IMPORTANT**: SavedVariables are only written to disk when you:
+- `/logout` or `/camp` (logout to character screen)
+- `/exit` or `/quit` (exit game)
+- Close the game normally
+
+**Data is NOT saved** during:
+- Game crashes
+- Alt+F4 / force quit
+- UI reloads (`/reload`)
+
+### Manual Save (Force Write to Disk)
+You can force WoW to save data immediately using:
+```lua
+-- In-game command
+/run ForceQuit()
+```
+This will save all SavedVariables and exit the game. Use before risky operations or testing.
+
+### Backup Location
+SavedVariables are stored at:
+```
+World of Warcraft\_retail_\WTF\Account\<ACCOUNT_NAME>\SavedVariables\AzerothDB.lua
+```
+
+For character-specific data:
+```
+World of Warcraft\_retail_\WTF\Account\<ACCOUNT_NAME>\<SERVER>\<CHARACTER>\SavedVariables\AzerothDB.lua
+```
+
+### External Backup (Recommended)
+Since in-game base64 backups can cause lag with large datasets, backing up the SavedVariables file directly is recommended:
+
+```powershell
+# Windows PowerShell - Copy SavedVariables file
+Copy-Item "$env:PROGRAMFILES(X86)\World of Warcraft\_retail_\WTF\Account\*\SavedVariables\AzerothDB.lua" `
+          "C:\Backups\AzerothDB_$(Get-Date -Format 'yyyyMMdd_HHmmss').lua"
+```
+
+```bash
+# Linux/Mac - Copy SavedVariables file
+cp ~/Games/World\ of\ Warcraft/_retail_/WTF/Account/*/SavedVariables/AzerothDB.lua \
+   ~/Backups/AzerothDB_$(date +%Y%m%d_%H%M%S).lua
+```
+
 ## Contributing
 
 Issues and pull requests welcome on [GitHub](https://github.com/x0ptr/AzerothDB).

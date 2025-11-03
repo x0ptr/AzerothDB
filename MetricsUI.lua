@@ -175,5 +175,4 @@ function AzerothDB_MetricsUI:UpdateMetricsDisplay()
     self.metricsFrame.stats:SetText(statsText)
 end
 
--- Attach module to AzerothDB
 AzerothDB.MetricsUI = AzerothDB_MetricsUI
