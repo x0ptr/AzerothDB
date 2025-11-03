@@ -1,8 +1,14 @@
 AzerothDB = {
-    _version = "1.1.2",
+    _version = "1.2.0",
     _tables = {},
     _connections = {},
     _connectionsByName = {},
+    _callbacks = {
+        CREATE = {},
+        INSERT = {},
+        DELETE = {},
+    },
+    _nextCallbackId = 1,
 }
 
 function AzerothDB:Initialize()
@@ -22,6 +28,7 @@ function AzerothDB:Initialize()
     end
     
     self._tables = AzerothDB_SavedData._sharedTables
+    self._callbackRegistry = {}
     
     for name, connData in pairs(AzerothDB_SavedData._connectionTables) do
         local conn = self:CreateConnection(name)
@@ -34,19 +41,24 @@ function AzerothDB:Initialize()
 end
 
 function AzerothDB:CreateConnection(name)
-    if not name or type(name) ~= "string" then
+    if not name or type(name) ~= "string" or name == "" then
         error("Connection name must be a non-empty string!")
         return nil
     end
     
     if self._connectionsByName[name] then
-        error("Connection '" .. name .. "' already exists!")
-        return nil
+        return self._connectionsByName[name]
     end
     
     local conn = {
         _name = name,
         _tables = {},
+        _callbacks = {
+            CREATE = {},
+            INSERT = {},
+            DELETE = {},
+        },
+        _callbackRegistry = {},
     }
     
     if not AzerothDB_SavedData then
@@ -74,7 +86,6 @@ function AzerothDB:CreateConnection(name)
 end
 
 
---- FACTORY FOR DB METHODS
 function AzerothDB:_bindConnectionMethods(conn)
     conn.CreateTable = function(self, tableName, columns)
         return AzerothDB:_CreateTable(conn._tables, tableName, columns)
@@ -139,14 +150,20 @@ function AzerothDB:_bindConnectionMethods(conn)
     conn.DropTable = function(self, tableName)
         return AzerothDB:_DropTable(conn._tables, tableName)
     end
+    
+    conn.Subscribe = function(self, event, callback)
+        return AzerothDB:_Subscribe(conn._callbacks, conn._callbackRegistry, event, callback)
+    end
+    
+    conn.Unsubscribe = function(self, id)
+        return AzerothDB:_Unsubscribe(conn._callbacks, conn._callbackRegistry, id)
+    end
 end
 
 
---- TABLES AND INDEXES
 function AzerothDB:_CreateTable(tables, tableName, columns)
     if tables[tableName] then
-        error("Table '" .. tableName .. "' already exists!")
-        return false
+        return true
     end
     
     if not columns or type(columns) ~= "table" then
@@ -177,6 +194,12 @@ function AzerothDB:_CreateTable(tables, tableName, columns)
         _indexes = {},
         _autoIncrement = 0,
     }
+    
+    self:_TriggerEvent(tables, "CREATE", {
+        tableName = tableName,
+        columns = columns,
+        primaryKey = primaryKey,
+    })
     
     print("AzerothDB: Created table '" .. tableName .. "' with primary key '" .. primaryKey .. "'")
     return true
@@ -248,6 +271,11 @@ function AzerothDB:_CreateIndex(tables, tableName, fieldName)
         return false
     end
     
+    if not tbl._columns[fieldName] then
+        error("Field '" .. fieldName .. "' does not exist in table '" .. tableName .. "'")
+        return false
+    end
+    
     if tbl._indexes[fieldName] then
         print("AzerothDB: Index on '" .. fieldName .. "' already exists")
         return false
@@ -271,7 +299,6 @@ function AzerothDB:CreateIndex(tableName, fieldName)
     return self:_CreateIndex(self._tables, tableName, fieldName)
 end
 
---- INSERT
 function AzerothDB:_Insert(tables, tableName, row)
     local tbl = tables[tableName]
     if not tbl then
@@ -329,6 +356,12 @@ function AzerothDB:_Insert(tables, tableName, row)
         end
     end
     
+    self:_TriggerEvent(tables, "INSERT", {
+        tableName = tableName,
+        row = row,
+        primaryKey = pk,
+    })
+    
     return pk
 end
 
@@ -339,7 +372,7 @@ end
 function AzerothDB:_InsertMany(tables, tableName, rows)
     local insertedKeys = {}
     for _, row in ipairs(rows) do
-        local pk = AzerothDB:_Insert(tables, tableName, row)
+        local pk = self:_Insert(tables, tableName, row)
         if pk then
             table.insert(insertedKeys, pk)
         end
@@ -351,7 +384,6 @@ function AzerothDB:InsertMany(tableName, rows)
     return self:_InsertMany(self._tables, tableName, rows)
 end
 
---- SELECT
 function AzerothDB:_Select(tables, tableName, whereFunc)
     local tbl = tables[tableName]
     if not tbl then
@@ -442,7 +474,6 @@ function AzerothDB:SelectOne(tableName, whereFunc)
     return self:_SelectOne(self._tables, tableName, whereFunc)
 end
 
---- UPDATE
 function AzerothDB:_Update(tables, tableName, whereFunc, updateFunc)
     local tbl = tables[tableName]
     if not tbl then
@@ -457,11 +488,6 @@ function AzerothDB:_Update(tables, tableName, whereFunc, updateFunc)
             local oldValues = {}
             for fieldName, index in pairs(tbl._indexes) do
                 oldValues[fieldName] = row[fieldName]
-            end
-            
-            local oldRow = {}
-            for k, v in pairs(row) do
-                oldRow[k] = v
             end
             
             updateFunc(row)
@@ -535,6 +561,11 @@ function AzerothDB:_UpdateByPK(tables, tableName, primaryKey, updateFunc)
     
     updateFunc(row)
     
+    if row[tbl._pk] ~= primaryKey then
+        error("Cannot modify primary key! Use Delete + Insert instead.")
+        return false
+    end
+    
     for colName, value in pairs(row) do
         if not tbl._columns[colName] then
             error("Column '" .. colName .. "' does not exist in table '" .. tableName .. "'")
@@ -576,7 +607,6 @@ function AzerothDB:UpdateByPK(tableName, primaryKey, updateFunc)
     return self:_UpdateByPK(self._tables, tableName, primaryKey, updateFunc)
 end
 
---- DELETE
 function AzerothDB:_Delete(tables, tableName, whereFunc)
     local tbl = tables[tableName]
     if not tbl then
@@ -585,10 +615,12 @@ function AzerothDB:_Delete(tables, tableName, whereFunc)
     end
     
     local deleteKeys = {}
+    local deletedRows = {}
     
     for pk, row in pairs(tbl._rows) do
         if whereFunc(row) then
             table.insert(deleteKeys, pk)
+            deletedRows[pk] = row
         end
     end
     
@@ -608,6 +640,12 @@ function AzerothDB:_Delete(tables, tableName, whereFunc)
         end
         
         tbl._rows[pk] = nil
+        
+        self:_TriggerEvent(tables, "DELETE", {
+            tableName = tableName,
+            row = row,
+            primaryKey = pk,
+        })
     end
     
     return #deleteKeys
@@ -618,7 +656,7 @@ function AzerothDB:Delete(tableName, whereFunc)
 end
 
 function AzerothDB:_DeleteByPK(tables, tableName, primaryKey)
-    return AzerothDB:_Delete(tables, tableName, function(row)
+    return self:_Delete(tables, tableName, function(row)
         return row[tables[tableName]._pk] == primaryKey
     end)
 end
@@ -628,7 +666,6 @@ function AzerothDB:DeleteByPK(tableName, primaryKey)
 end
 
 
---- UTILITY
 function AzerothDB:_Count(tables, tableName, whereFunc)
     local tbl = tables[tableName]
     if not tbl then
@@ -690,7 +727,84 @@ function AzerothDB:DropTable(tableName)
 end
 
 
---- EVENT HANDLING
+function AzerothDB:_Subscribe(callbacks, callbackRegistry, event, callback)
+    if not callbacks[event] then
+        error("Invalid event type. Must be CREATE, INSERT, or DELETE")
+        return nil
+    end
+    
+    if type(callback) ~= "function" then
+        error("Callback must be a function")
+        return nil
+    end
+    
+    local id = self._nextCallbackId
+    self._nextCallbackId = self._nextCallbackId + 1
+    
+    callbacks[event][id] = callback
+    callbackRegistry[id] = event
+    
+    return id
+end
+
+function AzerothDB:Subscribe(event, callback)
+    if not self._callbackRegistry then
+        self._callbackRegistry = {}
+    end
+    return self:_Subscribe(self._callbacks, self._callbackRegistry, event, callback)
+end
+
+function AzerothDB:_Unsubscribe(callbacks, callbackRegistry, id)
+    local event = callbackRegistry[id]
+    if not event then
+        return false
+    end
+    
+    callbacks[event][id] = nil
+    callbackRegistry[id] = nil
+    return true
+end
+
+function AzerothDB:Unsubscribe(id)
+    if not self._callbackRegistry then
+        self._callbackRegistry = {}
+    end
+    return self:_Unsubscribe(self._callbacks, self._callbackRegistry, id)
+end
+
+function AzerothDB:_TriggerCallbacks(callbacks, event, data)
+    if not callbacks[event] then
+        return
+    end
+    
+    for id, callback in pairs(callbacks[event]) do
+        local success, err = pcall(callback, data)
+        if not success then
+            print("AzerothDB: Error in " .. event .. " callback:", err)
+        end
+    end
+end
+
+function AzerothDB:_TriggerEvent(tablesRef, event, data)
+    local callbacksToUse = nil
+    
+    if tablesRef == self._tables then
+        callbacksToUse = self._callbacks
+    else
+        for _, conn in ipairs(self._connections) do
+            if conn._tables == tablesRef then
+                callbacksToUse = conn._callbacks
+                break
+            end
+        end
+    end
+    
+    if callbacksToUse then
+        self:_TriggerCallbacks(callbacksToUse, event, data)
+    end
+end
+
+
 local frame = CreateFrame("Frame")
 frame:RegisterEvent("ADDON_LOADED")
 frame:RegisterEvent("PLAYER_LOGOUT")

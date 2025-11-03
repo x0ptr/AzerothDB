@@ -6,7 +6,9 @@
 ```lua
 local db = AzerothDB:CreateConnection("MyAddonName")
 ```
-Connection names must be unique. Returns `nil` on error.
+Creates a new isolated connection or returns an existing one if already created with the same name. Returns `nil` on error (invalid name).
+
+Each connection has its own isolated tables and subscriptions.
 
 ---
 
@@ -20,6 +22,7 @@ db:CreateTable("Players", {
     level = {type = "number", default = 1}
 })
 ```
+Creates a new table with the specified schema. If the table already exists, returns `true` without modifying it (idempotent operation).
 
 **Column Options:**
 - `type`: `"string"`, `"number"`, `"boolean"`, `"table"`
@@ -138,6 +141,84 @@ Deletes all rows but keeps table structure.
 db:DropTable("Players")
 ```
 Completely removes table and all data.
+
+---
+
+## Subscription System
+
+Subscribe to database events to respond to data changes in real-time.
+
+### Subscribe(event, callback)
+```lua
+local subscriptionId = db:Subscribe("INSERT", function(data)
+    print("Row inserted into:", data.tableName)
+    print("Primary key:", data.primaryKey)
+    print("Row data:", data.row)
+end)
+```
+
+**Event Types:**
+- `"CREATE"`: Table is created
+- `"INSERT"`: Row is inserted
+- `"DELETE"`: Row is deleted
+
+**Callback Data:**
+
+*CREATE event:*
+```lua
+{
+    tableName = "Players",
+    columns = {...},
+    primaryKey = "id"
+}
+```
+
+*INSERT event:*
+```lua
+{
+    tableName = "Players",
+    row = {id = 1, name = "Arthas"},
+    primaryKey = 1
+}
+```
+
+*DELETE event:*
+```lua
+{
+    tableName = "Players",
+    row = {id = 1, name = "Arthas"},
+    primaryKey = 1
+}
+```
+
+Returns subscription ID for later unsubscription. The ID is globally unique across all event types.
+
+### Unsubscribe(id)
+```lua
+db:Unsubscribe(subscriptionId)
+```
+Removes a subscription by ID. Returns `true` if removed, `false` if not found.
+
+**Example:**
+```lua
+-- Subscribe to all inserts
+local insertId = db:Subscribe("INSERT", function(data)
+    if data.tableName == "Players" then
+        print("New player added:", data.row.name)
+    end
+end)
+
+-- Subscribe to deletes
+local deleteId = db:Subscribe("DELETE", function(data)
+    print("Deleted from", data.tableName, ":", data.primaryKey)
+end)
+
+-- Later, unsubscribe (no need to specify event type)
+db:Unsubscribe(insertId)
+db:Unsubscribe(deleteId)
+```
+
+**Note:** Subscriptions are isolated per connection. Global `AzerothDB` subscriptions only trigger for shared tables, while connection subscriptions only trigger for that connection's tables.
 
 ---
 
