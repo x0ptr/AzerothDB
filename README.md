@@ -263,7 +263,3 @@ Issues and pull requests welcome on [GitHub](https://github.com/x0ptr/AzerothDB)
 ## License
 
 MIT License
-
-## Version
-
-Current version: 1.0.1
