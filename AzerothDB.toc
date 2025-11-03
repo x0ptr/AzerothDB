@@ -2,10 +2,11 @@
 ## Title: AzerothDB
 ## Notes: A lightweight, SQL-like database addon for World of Warcraft
 ## Author: x0ptr <x0ptrr@gmail.com>
-## Version: 1.2.0
+## Version: 1.3.0
 ## X-Website: https://github.com/x0ptr/AzerothDB
 ## X-Source: https://github.com/x0ptr/AzerothDB
 ## X-License: MIT
 ## SavedVariables: AzerothDB_SavedData
 
 AzerothDB.lua
+MetricsUI.lua

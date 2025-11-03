@@ -1,5 +1,5 @@
 AzerothDB = {
-    _version = "1.2.0",
+    _version = "1.3.0",
     _tables = {},
     _connections = {},
     _connectionsByName = {},
@@ -9,6 +9,15 @@ AzerothDB = {
         DELETE = {},
     },
     _nextCallbackId = 1,
+    _metrics = {
+        CREATE = 0,
+        INSERT = 0,
+        DELETE = 0,
+        UPDATE = 0,
+        SELECT = 0,
+    },
+    _metricsHistory = {},
+    _metricsEnabled = false,
 }
 
 function AzerothDB:Initialize()
@@ -391,6 +400,8 @@ function AzerothDB:_Select(tables, tableName, whereFunc)
         return {}
     end
     
+    self._metrics.SELECT = (self._metrics.SELECT or 0) + 1
+    
     local results = {}
     
     if not whereFunc then
@@ -420,6 +431,8 @@ function AzerothDB:_SelectByPK(tables, tableName, primaryKey)
         return nil
     end
     
+    self._metrics.SELECT = (self._metrics.SELECT or 0) + 1
+    
     return tbl._rows[primaryKey]
 end
 
@@ -439,6 +452,8 @@ function AzerothDB:_SelectByIndex(tables, tableName, fieldName, value)
         error("No index on field '" .. fieldName .. "' in table '" .. tableName .. "'")
         return {}
     end
+    
+    self._metrics.SELECT = (self._metrics.SELECT or 0) + 1
     
     local results = {}
     local pks = index[value] or {}
@@ -460,6 +475,8 @@ function AzerothDB:_SelectOne(tables, tableName, whereFunc)
         error("Table '" .. tableName .. "' does not exist!")
         return nil
     end
+    
+    self._metrics.SELECT = (self._metrics.SELECT or 0) + 1
     
     for pk, row in pairs(tbl._rows) do
         if not whereFunc or whereFunc(row) then
@@ -535,6 +552,10 @@ function AzerothDB:_Update(tables, tableName, whereFunc, updateFunc)
         end
     end
     
+    if updatedCount > 0 then
+        self._metrics.UPDATE = (self._metrics.UPDATE or 0) + updatedCount
+    end
+    
     return updatedCount
 end
 
@@ -599,6 +620,8 @@ function AzerothDB:_UpdateByPK(tables, tableName, primaryKey, updateFunc)
             end
         end
     end
+    
+    self._metrics.UPDATE = (self._metrics.UPDATE or 0) + 1
     
     return true
 end
@@ -786,6 +809,8 @@ function AzerothDB:_TriggerCallbacks(callbacks, event, data)
 end
 
 function AzerothDB:_TriggerEvent(tablesRef, event, data)
+    self._metrics[event] = (self._metrics[event] or 0) + 1
+    
     local callbacksToUse = nil
     
     if tablesRef == self._tables then
@@ -812,7 +837,11 @@ frame:RegisterEvent("PLAYER_LOGOUT")
 frame:SetScript("OnEvent", function(self, event, addonName)
     if event == "ADDON_LOADED" and addonName == "AzerothDB" then
         AzerothDB:Initialize()
+        if AzerothDB.MetricsUI then
+            AzerothDB.MetricsUI:Initialize(AzerothDB)
+        end
     elseif event == "PLAYER_LOGOUT" then
         print("AzerothDB: Data saved")
     end
 end)
+
