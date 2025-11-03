@@ -1,5 +1,5 @@
 AzerothDB = {
-    _version = "1.4.0",
+    _version = "1.4.1",
     _tables = {},
     _connections = {},
     _connectionsByName = {},
@@ -21,6 +21,7 @@ AzerothDB = {
     _accountTables = {},
     _characterTables = {},
     _realmTables = {},
+    _compressionEnabled = true,
 }
 
 function AzerothDB:Initialize()
@@ -63,10 +64,25 @@ function AzerothDB:Initialize()
     self._tables = self._accountTables
     self._callbackRegistry = {}
     
+    for tableName, tbl in pairs(self._accountTables) do
+        self:_MigrateToCompressedFormat(tbl, tableName)
+    end
+    
+    for tableName, tbl in pairs(self._realmTables) do
+        self:_MigrateToCompressedFormat(tbl, tableName)
+    end
+    
+    for tableName, tbl in pairs(self._characterTables) do
+        self:_MigrateToCompressedFormat(tbl, tableName)
+    end
+    
     for name, connData in pairs(AzerothDB_SavedData._connectionTables) do
         local conn = self:CreateConnection(name)
         if conn then
             conn._tables = connData
+            for tableName, tbl in pairs(connData) do
+                self:_MigrateToCompressedFormat(tbl, tableName)
+            end
         end
     end
     
@@ -221,6 +237,15 @@ function AzerothDB:_CreateTable(tables, tableName, columns, scope)
         return false
     end
     
+    local fieldList = {}
+    local fieldIndex = {}
+    local idx = 1
+    for colName, _ in pairs(columns) do
+        fieldList[idx] = colName
+        fieldIndex[colName] = idx
+        idx = idx + 1
+    end
+    
     tables[tableName] = {
         _pk = primaryKey,
         _columns = columns,
@@ -228,7 +253,18 @@ function AzerothDB:_CreateTable(tables, tableName, columns, scope)
         _indexes = {},
         _autoIncrement = 0,
         _scope = scope or "account",
+        _compressed = self._compressionEnabled,
+        _fieldList = fieldList,
+        _fieldIndex = fieldIndex,
+        _columnData = {},
+        _pkMap = {},
     }
+    
+    if self._compressionEnabled then
+        for i = 1, #fieldList do
+            tables[tableName]._columnData[i] = {}
+        end
+    end
     
     self:_TriggerEvent(tables, "CREATE", {
         tableName = tableName,
@@ -238,6 +274,74 @@ function AzerothDB:_CreateTable(tables, tableName, columns, scope)
     
     print("AzerothDB: Created table '" .. tableName .. "' with primary key '" .. primaryKey .. "'")
     return true
+end
+
+function AzerothDB:_MigrateToCompressedFormat(tbl, tableName)
+    if tbl._compressed or not self._compressionEnabled then
+        return
+    end
+    
+    local hasData = false
+    for _ in pairs(tbl._rows) do
+        hasData = true
+        break
+    end
+    
+    if not hasData then
+        tbl._compressed = true
+        tbl._fieldList = tbl._fieldList or {}
+        tbl._fieldIndex = tbl._fieldIndex or {}
+        tbl._columnData = tbl._columnData or {}
+        tbl._pkMap = tbl._pkMap or {}
+        
+        if not tbl._fieldList[1] then
+            local idx = 1
+            for colName, _ in pairs(tbl._columns) do
+                tbl._fieldList[idx] = colName
+                tbl._fieldIndex[colName] = idx
+                tbl._columnData[idx] = {}
+                idx = idx + 1
+            end
+        end
+        return
+    end
+    
+    if not tbl._fieldList or not tbl._fieldList[1] then
+        tbl._fieldList = {}
+        tbl._fieldIndex = {}
+        local idx = 1
+        for colName, _ in pairs(tbl._columns) do
+            tbl._fieldList[idx] = colName
+            tbl._fieldIndex[colName] = idx
+            idx = idx + 1
+        end
+    end
+    
+    tbl._columnData = {}
+    tbl._pkMap = {}
+    
+    for i = 1, #tbl._fieldList do
+        tbl._columnData[i] = {}
+    end
+    
+    local rowIdx = 1
+    for pk, row in pairs(tbl._rows) do
+        tbl._pkMap[pk] = rowIdx
+        
+        for i = 1, #tbl._fieldList do
+            local fieldName = tbl._fieldList[i]
+            tbl._columnData[i][rowIdx] = row[fieldName]
+        end
+        
+        rowIdx = rowIdx + 1
+    end
+    
+    tbl._rows = {}
+    tbl._compressed = true
+    
+    if tableName then
+        print("AzerothDB: Migrated table '" .. tableName .. "' to compressed format (" .. (rowIdx - 1) .. " rows)")
+    end
 end
 
 function AzerothDB:CreateTable(tableName, columns, scope)
@@ -390,12 +494,29 @@ function AzerothDB:_Insert(tables, tableName, row)
         row[tbl._pk] = pk
     end
     
-    if tbl._rows[pk] then
-        error("Duplicate primary key '" .. tostring(pk) .. "' in table '" .. tableName .. "'")
-        return nil
+    if tbl._compressed then
+        if tbl._pkMap[pk] then
+            error("Duplicate primary key '" .. tostring(pk) .. "' in table '" .. tableName .. "'")
+            return nil
+        end
+    else
+        if tbl._rows[pk] then
+            error("Duplicate primary key '" .. tostring(pk) .. "' in table '" .. tableName .. "'")
+            return nil
+        end
     end
     
-    tbl._rows[pk] = row
+    if tbl._compressed then
+        local rowIdx = #tbl._columnData[1] + 1
+        tbl._pkMap[pk] = rowIdx
+        
+        for i = 1, #tbl._fieldList do
+            local fieldName = tbl._fieldList[i]
+            tbl._columnData[i][rowIdx] = row[fieldName]
+        end
+    else
+        tbl._rows[pk] = row
+    end
 
     for fieldName, index in pairs(tbl._indexes) do
         local value = row[fieldName]
@@ -444,16 +565,41 @@ function AzerothDB:_Select(tables, tableName, whereFunc)
     
     local results = {}
     
-    if not whereFunc then
-        for pk, row in pairs(tbl._rows) do
-            table.insert(results, row)
+    if tbl._compressed then
+        local numRows = #tbl._columnData[1]
+        
+        if not whereFunc then
+            for rowIdx = 1, numRows do
+                local row = {}
+                for i = 1, #tbl._fieldList do
+                    row[tbl._fieldList[i]] = tbl._columnData[i][rowIdx]
+                end
+                table.insert(results, row)
+            end
+            return results
         end
-        return results
-    end
-    
-    for pk, row in pairs(tbl._rows) do
-        if whereFunc(row) then
-            table.insert(results, row)
+        
+        for rowIdx = 1, numRows do
+            local row = {}
+            for i = 1, #tbl._fieldList do
+                row[tbl._fieldList[i]] = tbl._columnData[i][rowIdx]
+            end
+            if whereFunc(row) then
+                table.insert(results, row)
+            end
+        end
+    else
+        if not whereFunc then
+            for pk, row in pairs(tbl._rows) do
+                table.insert(results, row)
+            end
+            return results
+        end
+        
+        for pk, row in pairs(tbl._rows) do
+            if whereFunc(row) then
+                table.insert(results, row)
+            end
         end
     end
     
@@ -473,7 +619,20 @@ function AzerothDB:_SelectByPK(tables, tableName, primaryKey)
     
     self._metrics.SELECT = (self._metrics.SELECT or 0) + 1
     
-    return tbl._rows[primaryKey]
+    if tbl._compressed then
+        local rowIdx = tbl._pkMap[primaryKey]
+        if not rowIdx then
+            return nil
+        end
+        
+        local row = {}
+        for i = 1, #tbl._fieldList do
+            row[tbl._fieldList[i]] = tbl._columnData[i][rowIdx]
+        end
+        return row
+    else
+        return tbl._rows[primaryKey]
+    end
 end
 
 function AzerothDB:SelectByPK(tableName, primaryKey)
@@ -498,8 +657,21 @@ function AzerothDB:_SelectByIndex(tables, tableName, fieldName, value)
     local results = {}
     local pks = index[value] or {}
     
-    for _, pk in ipairs(pks) do
-        table.insert(results, tbl._rows[pk])
+    if tbl._compressed then
+        for _, pk in ipairs(pks) do
+            local rowIdx = tbl._pkMap[pk]
+            if rowIdx then
+                local row = {}
+                for i = 1, #tbl._fieldList do
+                    row[tbl._fieldList[i]] = tbl._columnData[i][rowIdx]
+                end
+                table.insert(results, row)
+            end
+        end
+    else
+        for _, pk in ipairs(pks) do
+            table.insert(results, tbl._rows[pk])
+        end
     end
     
     return results
@@ -540,55 +712,122 @@ function AzerothDB:_Update(tables, tableName, whereFunc, updateFunc)
     
     local updatedCount = 0
     
-    for pk, row in pairs(tbl._rows) do
-        if whereFunc(row) then
-            local oldValues = {}
-            for fieldName, index in pairs(tbl._indexes) do
-                oldValues[fieldName] = row[fieldName]
+    if tbl._compressed then
+        local numRows = #tbl._columnData[1]
+        
+        for rowIdx = 1, numRows do
+            local row = {}
+            for i = 1, #tbl._fieldList do
+                row[tbl._fieldList[i]] = tbl._columnData[i][rowIdx]
             end
             
-            updateFunc(row)
+            local pk = row[tbl._pk]
             
-            if row[tbl._pk] ~= pk then
-                error("Cannot modify primary key! Use Delete + Insert instead.")
-                return updatedCount
-            end
-            
-            for colName, value in pairs(row) do
-                if not tbl._columns[colName] then
-                    error("Column '" .. colName .. "' does not exist in table '" .. tableName .. "'")
+            if whereFunc(row) then
+                local oldValues = {}
+                for fieldName, index in pairs(tbl._indexes) do
+                    oldValues[fieldName] = row[fieldName]
+                end
+                
+                updateFunc(row)
+                
+                if row[tbl._pk] ~= pk then
+                    error("Cannot modify primary key! Use Delete + Insert instead.")
                     return updatedCount
                 end
                 
-                local colDef = tbl._columns[colName]
-                if value ~= nil and colDef.type and type(value) ~= colDef.type then
-                    error("Column '" .. colName .. "' expects type '" .. colDef.type .. "' but got '" .. type(value) .. "'")
-                    return updatedCount
-                end
-            end
-            
-            for fieldName, index in pairs(tbl._indexes) do
-                local oldValue = oldValues[fieldName]
-                local newValue = row[fieldName]
-                
-                if oldValue ~= newValue then
-                    if oldValue ~= nil and index[oldValue] then
-                        for i, indexPk in ipairs(index[oldValue]) do
-                            if indexPk == pk then
-                                table.remove(index[oldValue], i)
-                                break
-                            end
-                        end
+                for colName, value in pairs(row) do
+                    if not tbl._columns[colName] then
+                        error("Column '" .. colName .. "' does not exist in table '" .. tableName .. "'")
+                        return updatedCount
                     end
                     
-                    if newValue ~= nil then
-                        index[newValue] = index[newValue] or {}
-                        table.insert(index[newValue], pk)
+                    local colDef = tbl._columns[colName]
+                    if value ~= nil and colDef.type and type(value) ~= colDef.type then
+                        error("Column '" .. colName .. "' expects type '" .. colDef.type .. "' but got '" .. type(value) .. "'")
+                        return updatedCount
                     end
                 end
+                
+                for i = 1, #tbl._fieldList do
+                    tbl._columnData[i][rowIdx] = row[tbl._fieldList[i]]
+                end
+                
+                for fieldName, index in pairs(tbl._indexes) do
+                    local oldValue = oldValues[fieldName]
+                    local newValue = row[fieldName]
+                    
+                    if oldValue ~= newValue then
+                        if oldValue ~= nil and index[oldValue] then
+                            for i, indexPk in ipairs(index[oldValue]) do
+                                if indexPk == pk then
+                                    table.remove(index[oldValue], i)
+                                    break
+                                end
+                            end
+                        end
+                        
+                        if newValue ~= nil then
+                            index[newValue] = index[newValue] or {}
+                            table.insert(index[newValue], pk)
+                        end
+                    end
+                end
+                
+                updatedCount = updatedCount + 1
             end
-            
-            updatedCount = updatedCount + 1
+        end
+    else
+        for pk, row in pairs(tbl._rows) do
+            if whereFunc(row) then
+                local oldValues = {}
+                for fieldName, index in pairs(tbl._indexes) do
+                    oldValues[fieldName] = row[fieldName]
+                end
+                
+                updateFunc(row)
+                
+                if row[tbl._pk] ~= pk then
+                    error("Cannot modify primary key! Use Delete + Insert instead.")
+                    return updatedCount
+                end
+                
+                for colName, value in pairs(row) do
+                    if not tbl._columns[colName] then
+                        error("Column '" .. colName .. "' does not exist in table '" .. tableName .. "'")
+                        return updatedCount
+                    end
+                    
+                    local colDef = tbl._columns[colName]
+                    if value ~= nil and colDef.type and type(value) ~= colDef.type then
+                        error("Column '" .. colName .. "' expects type '" .. colDef.type .. "' but got '" .. type(value) .. "'")
+                        return updatedCount
+                    end
+                end
+                
+                for fieldName, index in pairs(tbl._indexes) do
+                    local oldValue = oldValues[fieldName]
+                    local newValue = row[fieldName]
+                    
+                    if oldValue ~= newValue then
+                        if oldValue ~= nil and index[oldValue] then
+                            for i, indexPk in ipairs(index[oldValue]) do
+                                if indexPk == pk then
+                                    table.remove(index[oldValue], i)
+                                    break
+                                end
+                            end
+                        end
+                        
+                        if newValue ~= nil then
+                            index[newValue] = index[newValue] or {}
+                            table.insert(index[newValue], pk)
+                        end
+                    end
+                end
+                
+                updatedCount = updatedCount + 1
+            end
         end
     end
     
@@ -610,9 +849,24 @@ function AzerothDB:_UpdateByPK(tables, tableName, primaryKey, updateFunc)
         return false
     end
     
-    local row = tbl._rows[primaryKey]
-    if not row then
-        return false
+    local row
+    local rowIdx
+    
+    if tbl._compressed then
+        rowIdx = tbl._pkMap[primaryKey]
+        if not rowIdx then
+            return false
+        end
+        
+        row = {}
+        for i = 1, #tbl._fieldList do
+            row[tbl._fieldList[i]] = tbl._columnData[i][rowIdx]
+        end
+    else
+        row = tbl._rows[primaryKey]
+        if not row then
+            return false
+        end
     end
     
     local oldValues = {}
@@ -637,6 +891,12 @@ function AzerothDB:_UpdateByPK(tables, tableName, primaryKey, updateFunc)
         if value ~= nil and colDef.type and type(value) ~= colDef.type then
             error("Column '" .. colName .. "' expects type '" .. colDef.type .. "' but got '" .. type(value) .. "'")
             return false
+        end
+    end
+    
+    if tbl._compressed then
+        for i = 1, #tbl._fieldList do
+            tbl._columnData[i][rowIdx] = row[tbl._fieldList[i]]
         end
     end
     
@@ -677,41 +937,95 @@ function AzerothDB:_Delete(tables, tableName, whereFunc)
         return 0
     end
     
-    local deleteKeys = {}
-    local deletedRows = {}
+    local deleteIndices = {}
     
-    for pk, row in pairs(tbl._rows) do
-        if whereFunc(row) then
-            table.insert(deleteKeys, pk)
-            deletedRows[pk] = row
-        end
-    end
-    
-    for _, pk in ipairs(deleteKeys) do
-        local row = tbl._rows[pk]
+    if tbl._compressed then
+        local numRows = #tbl._columnData[1]
         
-        for fieldName, index in pairs(tbl._indexes) do
-            local value = row[fieldName]
-            if value ~= nil and index[value] then
-                for i, indexPk in ipairs(index[value]) do
-                    if indexPk == pk then
-                        table.remove(index[value], i)
-                        break
+        for rowIdx = 1, numRows do
+            local row = {}
+            for i = 1, #tbl._fieldList do
+                row[tbl._fieldList[i]] = tbl._columnData[i][rowIdx]
+            end
+            
+            if whereFunc(row) then
+                table.insert(deleteIndices, rowIdx)
+                
+                local pk = row[tbl._pk]
+                
+                for fieldName, index in pairs(tbl._indexes) do
+                    local value = row[fieldName]
+                    if value ~= nil and index[value] then
+                        for i, indexPk in ipairs(index[value]) do
+                            if indexPk == pk then
+                                table.remove(index[value], i)
+                                break
+                            end
+                        end
                     end
                 end
+                
+                self:_TriggerEvent(tables, "DELETE", {
+                    tableName = tableName,
+                    row = row,
+                    primaryKey = pk,
+                })
             end
         end
         
-        tbl._rows[pk] = nil
+        for i = #deleteIndices, 1, -1 do
+            local rowIdx = deleteIndices[i]
+            
+            local pk = tbl._columnData[tbl._fieldIndex[tbl._pk]][rowIdx]
+            tbl._pkMap[pk] = nil
+            
+            for colIdx = 1, #tbl._fieldList do
+                table.remove(tbl._columnData[colIdx], rowIdx)
+            end
+            
+            for checkPk, checkIdx in pairs(tbl._pkMap) do
+                if checkIdx > rowIdx then
+                    tbl._pkMap[checkPk] = checkIdx - 1
+                end
+            end
+        end
+    else
+        local deleteKeys = {}
         
-        self:_TriggerEvent(tables, "DELETE", {
-            tableName = tableName,
-            row = row,
-            primaryKey = pk,
-        })
+        for pk, row in pairs(tbl._rows) do
+            if whereFunc(row) then
+                table.insert(deleteKeys, pk)
+            end
+        end
+        
+        for _, pk in ipairs(deleteKeys) do
+            local row = tbl._rows[pk]
+            
+            for fieldName, index in pairs(tbl._indexes) do
+                local value = row[fieldName]
+                if value ~= nil and index[value] then
+                    for i, indexPk in ipairs(index[value]) do
+                        if indexPk == pk then
+                            table.remove(index[value], i)
+                            break
+                        end
+                    end
+                end
+            end
+            
+            tbl._rows[pk] = nil
+            
+            self:_TriggerEvent(tables, "DELETE", {
+                tableName = tableName,
+                row = row,
+                primaryKey = pk,
+            })
+        end
+        
+        return #deleteKeys
     end
     
-    return #deleteKeys
+    return #deleteIndices
 end
 
 function AzerothDB:Delete(tableName, whereFunc)
@@ -735,21 +1049,41 @@ function AzerothDB:_Count(tables, tableName, whereFunc)
         return 0
     end
     
-    if not whereFunc then
+    if tbl._compressed then
+        if not whereFunc then
+            return #tbl._columnData[1]
+        end
+        
         local count = 0
-        for _ in pairs(tbl._rows) do
-            count = count + 1
+        local numRows = #tbl._columnData[1]
+        
+        for rowIdx = 1, numRows do
+            local row = {}
+            for i = 1, #tbl._fieldList do
+                row[tbl._fieldList[i]] = tbl._columnData[i][rowIdx]
+            end
+            if whereFunc(row) then
+                count = count + 1
+            end
+        end
+        return count
+    else
+        if not whereFunc then
+            local count = 0
+            for _ in pairs(tbl._rows) do
+                count = count + 1
+            end
+            return count
+        end
+        
+        local count = 0
+        for pk, row in pairs(tbl._rows) do
+            if whereFunc(row) then
+                count = count + 1
+            end
         end
         return count
     end
-    
-    local count = 0
-    for pk, row in pairs(tbl._rows) do
-        if whereFunc(row) then
-            count = count + 1
-        end
-    end
-    return count
 end
 
 function AzerothDB:Count(tableName, whereFunc)
@@ -763,7 +1097,15 @@ function AzerothDB:_Clear(tables, tableName)
         return false
     end
     
-    tbl._rows = {}
+    if tbl._compressed then
+        for i = 1, #tbl._fieldList do
+            tbl._columnData[i] = {}
+        end
+        tbl._pkMap = {}
+    else
+        tbl._rows = {}
+    end
+    
     for fieldName in pairs(tbl._indexes) do
         tbl._indexes[fieldName] = {}
     end
